@@ -305,3 +305,421 @@ ggtitle("cell type proportions") +
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
   theme(axis.text.x = element_text(angle = 90))
 
+
+
+
+
+
+
+####Trajectory Analysis
+#### Create a Monocle CDS Object
+#this is the 0.5 resolution object
+library(ggpubr)
+library(ggsci)
+library(RColorBrewer)
+library(Seurat)
+set.seed(1)
+
+merged_obj <- readRDS("~/Desktop/Kayla_scData/merged_obj.rds")
+merged_obj <- JoinLayers(merged_obj)
+DefaultAssay(merged_obj) <- "RNA"
+
+DimPlot(merged_obj, reduction = "umap", label = FALSE)
+
+Idents(merged_obj) <-"Treatment"
+DefaultAssay(merged_obj) <- "RNA"
+merged_obj_subset <- subset(x = merged_obj, idents = c("IL9Tx_IL9R_AQ", "IL9Tx_IL9R_PR","IL9Tx_IL9R_WT"))
+
+Idents(merged_obj_subset) <-"seurat_clusters"
+#Monocle3
+# Project PC dimensions to whole data set
+gene_annotation <- as.data.frame(rownames(merged_obj_subset@reductions[["pca"]]@feature.loadings),
+                                 row.names = rownames(merged_obj_subset@reductions[["pca"]]@feature.loadings))
+colnames(gene_annotation) <- "gene_short_name"
+
+cell_metadata <- as.data.frame(merged_obj_subset[["RNA"]]$counts@Dimnames[[2]],
+                               row.names = merged_obj_subset[["RNA"]]$counts@Dimnames[[2]])
+colnames(cell_metadata) <- "barcode"
+New_matrix <- merged_obj_subset[["RNA"]]$counts
+New_matrix <- New_matrix[rownames(merged_obj_subset@reductions[["pca"]]@feature.loadings), ]
+expression_matrix <- New_matrix
+
+####
+cds_from_seurat <- new_cell_data_set(expression_matrix,cell_metadata = cell_metadata,gene_metadata = gene_annotation) #created the monocle3 object
+
+recreate.partition <- c(rep(1, length(cds_from_seurat@colData@rownames)))
+names(recreate.partition) <- cds_from_seurat@colData@rownames
+recreate.partition <- as.factor(recreate.partition)
+cds_from_seurat@clusters@listData[["UMAP"]][["partitions"]] <- recreate.partition
+
+list_cluster <- merged_obj_subset@active.ident
+names(list_cluster) <- merged_obj_subset[["RNA"]]$counts@Dimnames[[2]]
+
+cds_from_seurat@clusters@listData[["UMAP"]][["clusters"]] <- list_cluster
+
+cds_from_seurat@int_colData@listData$reducedDims@listData[["UMAP"]] <- merged_obj_subset@reductions[["umap"]]@cell.embeddings
+
+#Then perform pseudotime analysis:
+cds_from_seurat <- learn_graph(cds_from_seurat)
+
+plot_cells(cds_from_seurat, 
+           color_cells_by = 'cluster',
+           label_groups_by_cluster=TRUE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=4, cell_size=0.5,group_label_size=5)
+
+#calculate the psudotime for each cell after defining the root cells 
+#cds_from_seurat <-  order_cells(cds_from_seurat, reduction_method = "UMAP", root_cells = colnames(cds_from_seurat[, clusters(cds_from_seurat) == "T-stem-like (Tcf7+)"]))
+#ps_tim <- pseudotime(cds_from_seurat)
+
+cds_from_seurat <-  order_cells(cds_from_seurat,reduction_method = "UMAP")
+
+plot_cells(cds_from_seurat,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE, #Branch points
+           group_label_size = 1,
+           graph_label_size=4,label_roots = TRUE,cell_size = 0.8)+
+  theme(
+    axis.text = element_text(size = 19, colour = "black"),  # Increase axis text size
+    axis.title = element_text(size = 17,colour = "black"),  # Increase axis title size
+    legend.text = element_text(size = 17,colour = "black"),  # Increase legend text size
+    legend.title = element_text(size = 17,colour = "black")  # Increase legend title size
+  )
+
+#ggsave("pseudotime_umap_new.pdf", width = 13, height = 12, units = "cm")
+
+
+#scale_colour_gradient2(low = "red", mid = "white",high = "blue", midpoint = 3, space = "Lab",na.value = "#F5F5F500", guide = "colourbar", aesthetics = "colour")
+
+#ggsave("pseudotime_umap.pdf", width = 18, height = 12, units = "cm")
+#ggsave("~/UMAP_monocle3.pdf", width = 18, height = 12, units = "cm")
+
+#Extract the pseudotime value and add it to the seurat
+merged_obj_subset <- AddMetaData(
+  object = merged_obj_subset,
+  metadata = cds_from_seurat@principal_graph_aux@listData$UMAP$pseudotime,
+  col.name = "pseudotime_scores"
+)
+
+#Plot this as a violin plot
+FeaturePlot(merged_obj_subset, "pseudotime_scores", pt.size = 0.1) & scale_color_viridis_c()
+
+VlnPlot(merged_obj, features = "pseudotime_scores")
+Idents(merged_obj) <- merged_obj$Treatment
+VlnPlot(merged_obj, features = c("pseudotime_scores"), pt.size = 0, ncol = 1,add.noise = FALSE)
+
+c("Tem/rm" = "#E64B35FF",  
+  "T early activated" = "#FF7F00",
+  "Teff-1/prolif" = "#984EA3",
+  "Teff-2/prolif" = "#4DBBD5FF",
+  "Teff-3/pex/naïve(mix)"="#42B540FF","Teff-4/naïve/em(mix)"="#CCAA7A",
+  "Teff-5(Stat1/Gzmb/Prf1)"="#7E6148FF","Tscm-like(Tcf7)"="#7D3434","Tmyeloid-like"="#79AF97FF","Tprolif"="#3C5488FF")
+
+Idents(merged_obj_subset) <-"seurat_clusters"
+
+merged_obj_subset <- RenameIdents(merged_obj_subset, `0` = "Tem/rm", `1` = "T early activated", `2` = "Teff-1/prolif",
+                                  `3` = "Teff-2/prolif", `4` = "Teff-3/pex/naïve(mix)", `5` = "Teff-4/naïve/em(mix)", `6` = "Teff-5(Stat1/Gzmb/Prf1)", `7` = "Tscm-like(Tcf7)",`8`="Tmyeloid-like",`9`="Tprolif")
+#pLOTTING
+RidgePlot(merged_obj_subset, features = "pseudotime_scores") +  
+  scale_fill_manual(values = c("Tem/rm" = "#E64B35FF",  
+                               "T early activated" = "#FF7F00",
+                               "Teff-1/prolif" = "#984EA3",
+                               "Teff-2/prolif" = "#4DBBD5FF",
+                               "Teff-3/pex/naïve(mix)"="#42B540FF","Teff-4/naïve/em(mix)"="#CCAA7A",
+                               "Teff-5(Stat1/Gzmb/Prf1)"="#7E6148FF","Tscm-like(Tcf7)"="#7D3434","Tmyeloid-like"="#79AF97FF","Tprolif"="#3C5488FF"))+
+  theme_minimal() +
+  labs(title = "Pseudotime Scores by Cluster",
+       y = "Cluster Annotation",
+       x = "Pseudotime Scores") +
+  theme(axis.text.x = element_text(hjust = 1, color="black", size=17),
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(),
+        axis.title.y = element_text(color="black", size=17),
+        axis.title.x = element_text(color="black", size=17),
+        axis.text.y = element_text(color="black", size=17),
+        panel.grid.minor = element_blank(),
+        plot.background = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, size = 1),
+        legend.text = element_text(size = 17),
+        plot.title = element_text(size = 17, hjust = 0.5))
+
+ggsave("pseudotime_RidgePlot_by_clusters.pdf", width = 24, height = 12, units = "cm")
+
+
+
+############
+Idents(merged_obj_subset) <- "Treatment"
+selected_conditions <- c("IL9Tx_IL9R_AQ", "IL9Tx_IL9R_PR", "IL9Tx_IL9R_WT")
+# Ensure the condition is a factor
+merged_obj_subset$Treatment <- factor(merged_obj_subset$Treatment, levels = selected_conditions)
+# Set the Idents of the Seurat object
+Idents(merged_obj_subset) <- "Treatment"
+
+
+RidgePlot(merged_obj_subset, features = "pseudotime_scores")+
+  scale_fill_manual(values = c("#91D1C2FF", "#F39B7FFF", "blue")) +
+  theme_minimal() +
+  labs(title = "Pseudotime Scores by Treatment",
+       y = "Treatment",
+       x = "Pseudotime Scores") +
+  theme(axis.text.x = element_text(hjust = 1,color="black", size=14),
+        panel.background = element_blank(),  # Remove panel background
+        panel.grid.major = element_blank(),  # Remove major grid lines
+        axis.title.y = element_text(color="black", size=14),
+        axis.title.x = element_text(color="black", size=14),
+        axis.text.y= element_text(color="black", size=14),
+        panel.grid.minor = element_blank(),  # Remove minor grid lines
+        plot.background = element_blank(),   # Remove plot background
+        panel.border = element_rect(color = "black", fill = NA,size = 1),
+        legend.text = element_text(size = 16),
+        plot.title = element_text(size = 14, hjust = 0.5)) 
+
+
+
+#reorder:
+# Define the order for plotting
+plot_order <- c("IL9Tx_IL9R_AQ", "IL9Tx_IL9R_PR", "IL9Tx_IL9R_WT")
+
+# Define the order for the legend
+legend_order <- c("IL9Tx_IL9R_WT", "IL9Tx_IL9R_PR", "IL9Tx_IL9R_AQ")
+
+# Ensure the condition is a factor with the plot order
+merged_obj_subset$Treatment <- factor(merged_obj_subset$Treatment, levels = plot_order)
+
+# Set the Idents of the Seurat object
+Idents(merged_obj_subset) <- "Treatment"
+
+# Create the RidgePlot
+RidgePlot(merged_obj_subset, features = "pseudotime_scores") +
+  scale_fill_manual(values = c("IL9Tx_IL9R_AQ" = "#91D1C2FF", 
+                               "IL9Tx_IL9R_PR" = "#F39B7FFF", 
+                               "IL9Tx_IL9R_WT" = "blue"),
+                    breaks = legend_order) +
+  theme_minimal() +
+  labs(title = "Pseudotime Scores by Treatment",
+       y = "Treatment",
+       x = "Pseudotime Scores") +
+  theme(axis.text.x = element_text(hjust = 1, color="black", size=14),
+        panel.background = element_blank(),
+        panel.grid.major = element_blank(),
+        axis.title.y = element_text(color="black", size=16),
+        axis.title.x = element_text(color="black", size=16),
+        axis.text.y = element_text(color="black", size=16),
+        panel.grid.minor = element_blank(),
+        plot.background = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA, size = 1),
+        legend.text = element_text(size = 16),
+        plot.title = element_text(size = 16, hjust = 0.5))
+
+
+ggsave("pseudotime_RidgePlot_by_treatment.pdf", width = 18, height = 10, units = "cm")
+
+
+#BOXPLOT
+library(Seurat)
+library(ggplot2)
+
+DefaultAssay(merged_obj_subset) <- "RNA"
+Idents(merged_obj_subset) <- "seurat_clusters"
+#Rename the idents
+merged_obj_subset <- RenameIdents(merged_obj_subset, `0` = "Tem/rm", `1` = "Teff-1/activated", `2` = "Teff-2/prolif",
+                                  `3` = "Teff-3/prolif", `4` = "Teff-4/pex/naïve(mix)", `5` = "Teff-5/naïve/em(mix)", `6` = "Teff-6(Stat1/Gzmb/Prf1)", `7` = "Tscm-like(Tcf7)",`8`="Tmyeloid-like",`9`="Tprolif")
+
+
+
+merged_obj_subset$cluster_annotation <- Idents(merged_obj_subset)
+
+selected_conditions <- c("IL9Tx_IL9R_WT", "IL9Tx_IL9R_PR", "IL9Tx_IL9R_AQ")
+
+#Extract data from Seurat object for ggplot
+data <- FetchData(merged_obj_subset, vars = c("pseudotime_scores", "Treatment","cluster_annotation"))
+data_filtered <- data[data$Treatment %in% selected_conditions, ]
+# Ensure the condition is a factor
+data_filtered$Treatment <- factor(data_filtered$Treatment, levels = selected_conditions)
+#Create a boxplot using ggplot2
+
+boxplot <- ggplot(data_filtered, aes(x = Treatment, y = pseudotime_scores, fill = Treatment)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("blue", "#F39B7FFF", "#91D1C2FF")) +
+  theme_minimal() +
+  labs(title = "Pseudotime Scores by Treatment",
+       x = "Treatment",
+       y = "Pseudotime Scores") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,color="black", size=10),
+        panel.background = element_blank(),  # Remove panel background
+        panel.grid.major = element_blank(),  # Remove major grid lines
+        axis.title.y = element_text(color="black", size=12),
+        axis.title.x = element_text(color="black", size=12),
+        axis.text.y= element_text(color="black", size=10),
+        panel.grid.minor = element_blank(),  # Remove minor grid lines
+        plot.background = element_blank(),   # Remove plot background
+        panel.border = element_rect(color = "black", fill = NA))  # Add border around plot area
+
+print(boxplot)
+ggsave("pseudotime_boxplot_by_treatment.pdf", width = 12, height = 8, units = "cm")
+
+
+#By cluster annotation
+# Create a boxplot using ggplot2
+boxplot <- ggplot(data_filtered, aes(x = cluster_annotation, y = pseudotime_scores, fill = cluster_annotation)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#666666", "#AD7700",
+                               "#1C91D4", "#007756", "#D5C711", "#005685", "#A04700", "#B14380", "#4D4D4D", "#FFBE2D", "#80C7EF",
+                               "#00F6B3", "#F4EB71", "#06A5FF", "#FF8320", "#D99BBD", "#8C8C8C")) +
+  theme_minimal() +
+  labs(title = "Pseudotime Scores by cluster annotation",
+       x = "Cluster Annotation",
+       y = "Pseudotime Scores") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,color="black", size=10),
+        panel.background = element_blank(),  # Remove panel background
+        panel.grid.major = element_blank(),  # Remove major grid lines
+        axis.title.y = element_text(color="black", size=12),
+        axis.title.x = element_text(color="black", size=12),
+        axis.text.y= element_text(color="black", size=10),
+        panel.grid.minor = element_blank(),  # Remove minor grid lines
+        plot.background = element_blank(),   # Remove plot background
+        panel.border = element_rect(color = "black", fill = NA))  # Add border around plot area
+
+print(boxplot)
+
+ggsave("~/Desktop/Figure1-IL9/pseudotime_boxplot_by_cluster-annotation.pdf", width = 12, height = 10, units = "cm")
+
+
+##pstat1 module vs pseudotime
+# Extract module scores
+pseudotime_scores <- merged_obj_subset[["pseudotime_scores"]]
+pstat1_scores <- score_pstat1[["pstat11"]]
+
+#Combine scores into a data frame
+score_df <- data.frame(
+  pseudotime = pseudotime_scores,
+  pSTAT1 = pstat1_scores
+)
+
+#Calculate correlation
+correlation <- cor(score_df$pseudotime_scores, score_df$pstat11, method = "spearman")
+
+# Print the correlation
+print(paste("Correlation between pseudotime and pSTAT1 scores:", correlation))
+
+#Visualize the correlation with a scatter plot
+library(ggplot2)
+ggplot(score_df, aes(x = pseudotime_scores, y = pstat11)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  labs(title = "Correlation between pseudotime and pSTAT1 scores",
+       x = "pseudotime score",
+       y = "pSTAT1 score") +
+  theme_minimal()
+
+
+
+###
+#TCF7 
+VlnPlot(merged_obj_subset, features = c("Tcf7"), pt.size = 0, ncol = 1, add.noise = FALSE, cols = cluster_colors_treatment) +
+  theme(
+    axis.title.x = element_text(color = "black", size = 18),
+    axis.text.x = element_text(color = "black", size = 18),
+    axis.title.y = element_text(color = "black", size = 18),
+    axis.text.y = element_text(color = "black", size = 18),
+    legend.text = element_text(size = 18, color = "black")
+  ) +
+  ggtitle("tcf7")
+
+ggsave("Tcf7_by_treatment.pdf", width = 18, height = 12, units = "cm")
+
+
+#pstat3
+Idents(merged_obj_subset) <-"Treatment"
+
+cluster_colors_treatment <- c("IL9Tx_IL9R_WT" = "blue",
+                              "IL9Tx_IL9R_PR" = "#F39B7FFF",
+                              "IL9Tx_IL9R_AQ" = "#91D1C2FF")
+
+VlnPlot(merged_obj_subset, features = c("Il7r"), pt.size = 0, ncol = 1, add.noise = FALSE, cols = cluster_colors_treatment) +
+  theme(
+    axis.title.x = element_text(color = "black", size = 18),
+    axis.text.x = element_text(color = "black", size = 18),
+    axis.title.y = element_text(color = "black", size = 18),
+    axis.text.y = element_text(color = "black", size = 18),
+    legend.text = element_text(size = 18, color = "black")
+  ) +
+  ggtitle("Il7r")
+
+ggsave("Il7r_by_treatment.pdf", width = 18, height = 12, units = "cm")
+
+
+#IL7R
+#by treatment
+Idents(merged_obj_subset) <-"seurat_clusters"
+
+merged_obj_subset <- RenameIdents(merged_obj_subset, `0` = "Tem/rm", `1` = "T early activated", `2` = "Teff-1/prolif",
+                                  `3` = "Teff-2/prolif", `4` = "Teff-3/pex/naïve(mix)", `5` = "Teff-4/naïve/em(mix)", `6` = "Teff-5(Stat1/Gzmb/Prf1)", `7` = "Tscm-like(Tcf7)",`8`="Tmyeloid-like",`9`="Tprolif")
+
+
+cluster_colors_treatment <- c("Tem/rm" = "#E64B35FF",  
+                              "T early activated" = "#FF7F00",
+                              "Teff-1/prolif" = "#984EA3",
+                              "Teff-2/prolif" = "#4DBBD5FF",
+                              "Teff-3/pex/naïve(mix)"="#42B540FF","Teff-4/naïve/em(mix)"="#CCAA7A",
+                              "Teff-5(Stat1/Gzmb/Prf1)"="#7E6148FF","Tscm-like(Tcf7)"="#7D3434","Tmyeloid-like"="#79AF97FF","Tprolif"="#3C5488FF")
+
+cluster_colors_treatment <- c("IL9Tx_IL9R_WT" = "blue",
+                              "IL9Tx_IL9R_PR" = "#F39B7FFF",
+                              "IL9Tx_IL9R_AQ" = "#91D1C2FF")
+
+DefaultAssay(merged_obj_subset) <- "RNA"
+
+VlnPlot(merged_obj_subset, features = c("Tcf7"), pt.size = 0, ncol = 1, add.noise = FALSE, cols = cluster_colors_treatment) +
+  theme(
+    axis.title.x = element_text(color = "black", size = 13),
+    axis.text.x = element_text(color = "black", size = 13),
+    axis.title.y = element_text(color = "black", size = 13),
+    axis.text.y = element_text(color = "black", size = 13),
+    legend.text = element_text(size = 13, color = "black")
+  ) +
+  ggtitle("Tcf7")
+
+ggsave("Tcf7_by_cluster.pdf", width = 16, height = 10, units = "cm")
+
+
+
+#reorder the idents
+new_order <- c("IL9Tx_IL9R_WT", "IL9Tx_IL9R_PR", "IL9Tx_IL9R_AQ")
+# Reorder the Idents
+Idents(merged_obj_subset) <- factor(Idents(merged_obj_subset), levels = new_order)
+# Check the new order
+table(Idents(merged_obj_subset))
+
+
+VlnPlot(merged_obj_subset, features = c("Prf1"), pt.size = 0, ncol = 1, add.noise = FALSE, cols = cluster_colors_treatment) +
+  theme(
+    axis.title.x = element_text(color = "black", size = 18),
+    axis.text.x = element_text(color = "black", size = 18),
+    axis.title.y = element_text(color = "black", size = 18),
+    axis.text.y = element_text(color = "black", size = 18),
+    legend.text = element_text(size = 18, color = "black")
+  ) +
+  ggtitle("Prf1")
+
+ggsave("prf1_by_treatment.pdf", width = 18, height = 12, units = "cm")
+
+
+
+VlnPlot(merged_obj_subset, features = c("Gzmb"), pt.size = 0, ncol = 1, add.noise = FALSE, cols = cluster_colors_treatment) +
+  theme(
+    axis.title.x = element_text(color = "black", size = 18),
+    axis.text.x = element_text(color = "black", size = 18),
+    axis.title.y = element_text(color = "black", size = 18),
+    axis.text.y = element_text(color = "black", size = 18),
+    legend.text = element_text(size = 18, color = "black")
+  ) +
+  ggtitle("Gzmb")
+
+ggsave("GZMB_by_treatment.pdf", width = 18, height = 12, units = "cm")
+
+
+
